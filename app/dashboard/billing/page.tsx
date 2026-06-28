@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { query } from "@/lib/db";
 import { PLANS, formatNaira } from "@/lib/billing/plans";
 import type { PlanId } from "@/lib/billing/plans";
 import { UpgradeFlow } from "@/components/dashboard/upgrade-flow";
@@ -11,16 +11,14 @@ export default async function BillingPage() {
   if (!user) return null;
 
   const plan = PLANS[user.plan as PlanId];
-  const requests = db
-    .prepare(`SELECT * FROM billing_requests WHERE user_id = ? ORDER BY created_at DESC`)
-    .all(user.id) as {
+  const requests = await query<{
     id: string;
     plan: string;
     billing_cycle: string;
     amount_kobo: number;
     status: string;
     created_at: string;
-  }[];
+  }>(`SELECT * FROM billing_requests WHERE user_id = $1 ORDER BY created_at DESC`, [user.id]);
 
   return (
     <div className="max-w-3xl">

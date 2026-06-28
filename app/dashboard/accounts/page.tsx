@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { query } from "@/lib/db";
 import { AccountsManager } from "@/components/dashboard/accounts-manager";
 import type { Platform } from "@/lib/platforms";
 
@@ -9,9 +9,10 @@ export default async function AccountsPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const accounts = db
-    .prepare(`SELECT id, platform, handle FROM connected_accounts WHERE user_id = ? AND status = 'connected'`)
-    .all(user.id) as { id: string; platform: Platform; handle: string }[];
+  const accounts = await query<{ id: string; platform: Platform; handle: string }>(
+    `SELECT id, platform, handle FROM connected_accounts WHERE user_id = $1 AND status = 'connected'`,
+    [user.id]
+  );
 
   return (
     <div className="max-w-4xl">

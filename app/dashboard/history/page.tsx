@@ -11,7 +11,7 @@ export default async function HistoryPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const posts = listUserPosts(user.id, 100) as {
+  const posts = (await listUserPosts(user.id, 100)) as {
     id: string;
     body: string;
     status: string;

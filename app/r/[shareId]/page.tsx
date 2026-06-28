@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { getPostByShareId } from "@/lib/posts/engine";
+import { getPostByShareId, incrementShareViews } from "@/lib/posts/engine";
 import { PlatformIcon } from "@/components/icons/platforms";
 import { PLATFORMS, type Platform } from "@/lib/platforms";
 import { VirelloLogo } from "@/components/icons/logo";
@@ -16,10 +16,10 @@ export async function generateMetadata({
   params: Promise<{ shareId: string }>;
 }): Promise<Metadata> {
   const { shareId } = await params;
-  const result = getPostByShareId(shareId);
+  const result = await getPostByShareId(shareId);
   if (!result) return {};
 
-  const post = result.post as { body: string };
+  const post = result.post;
   const description = post.body.slice(0, 160);
   const ogImage = `${SITE_URL}/api/og?id=${shareId}`;
 
@@ -42,11 +42,15 @@ export async function generateMetadata({
 
 export default async function SharePage({ params }: { params: Promise<{ shareId: string }> }) {
   const { shareId } = await params;
-  const result = getPostByShareId(shareId);
+  const result = await getPostByShareId(shareId);
   if (!result) notFound();
 
   const post = result.post;
   const targets = result.targets as { platform: Platform; status: string; published_url: string | null }[];
+
+  // Counted once per real page render, not during metadata generation, which both
+  // run on every request but would otherwise double the count per visit.
+  await incrementShareViews(post.id);
 
   const pageUrl = `${SITE_URL}/r/${shareId}`;
 

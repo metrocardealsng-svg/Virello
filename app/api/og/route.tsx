@@ -1,5 +1,5 @@
 import { ImageResponse } from "next/og";
-import { db } from "@/lib/db";
+import { queryOne } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -7,9 +7,9 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const shareId = searchParams.get("id") ?? "";
 
-  const post = db.prepare(`SELECT body FROM posts WHERE share_id = ?`).get(shareId) as
-    | { body: string }
-    | undefined;
+  const post = await queryOne<{ body: string }>(`SELECT body FROM posts WHERE share_id = $1`, [
+    shareId,
+  ]);
 
   const text = post?.body?.slice(0, 180) ?? "Create once. Reach everywhere.";
 

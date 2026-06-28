@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { email, password } = parsed.data;
-  const user = findUserByEmail(email);
+  const user = await findUserByEmail(email);
 
   if (!user || !user.password_hash) {
     return NextResponse.json({ error: "No account found with that email" }, { status: 401 });

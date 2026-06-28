@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { query, queryOne } from "@/lib/db";
 import { getUsage } from "@/lib/billing/usage";
 import { PLANS } from "@/lib/billing/plans";
 import type { PlanId } from "@/lib/billing/plans";
@@ -16,26 +16,33 @@ export default async function DashboardOverview() {
   if (!user) return null;
 
   const plan = PLANS[user.plan as PlanId];
-  const { postsUsed } = getUsage(user.id);
+  const { postsUsed } = await getUsage(user.id);
   const limit = plan.postsPerMonth;
 
-  const recentPosts = db
-    .prepare(`SELECT * FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 5`)
-    .all(user.id) as { id: string; body: string; status: string; created_at: string; share_id: string }[];
+  const recentPosts = await query<{
+    id: string;
+    body: string;
+    status: string;
+    created_at: string;
+    share_id: string;
+  }>(`SELECT * FROM posts WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5`, [user.id]);
 
-  const connectedCount = (
-    db
-      .prepare(`SELECT COUNT(*) as c FROM connected_accounts WHERE user_id = ? AND status = 'connected'`)
-      .get(user.id) as { c: number }
-  ).c;
+  const connectedRow = await queryOne<{ c: string }>(
+    `SELECT COUNT(*) as c FROM connected_accounts WHERE user_id = $1 AND status = 'connected'`,
+    [user.id]
+  );
+  const connectedCount = connectedRow ? parseInt(connectedRow.c, 10) : 0;
 
-  const platformBreakdown = db
-    .prepare(
-      `SELECT platform, COUNT(*) as c FROM post_targets pt
-       JOIN posts p ON p.id = pt.post_id
-       WHERE p.user_id = ? GROUP BY platform`
-    )
-    .all(user.id) as { platform: Platform; c: number }[];
+  const platformBreakdownRaw = await query<{ platform: Platform; c: string }>(
+    `SELECT platform, COUNT(*) as c FROM post_targets pt
+     JOIN posts p ON p.id = pt.post_id
+     WHERE p.user_id = $1 GROUP BY platform`,
+    [user.id]
+  );
+  const platformBreakdown = platformBreakdownRaw.map((row) => ({
+    platform: row.platform,
+    c: parseInt(row.c, 10),
+  }));
 
   return (
     <div className="max-w-5xl">

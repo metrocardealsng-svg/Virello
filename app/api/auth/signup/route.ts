@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
 
   const { name, email, password } = parsed.data;
 
-  if (findUserByEmail(email)) {
+  if (await findUserByEmail(email)) {
     return NextResponse.json(
       { error: "An account with this email already exists. Try signing in instead." },
       { status: 409 }
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   }
 
   const passwordHash = await hashPassword(password);
-  const userId = createUser(email, name, passwordHash);
+  const userId = await createUser(email, name, passwordHash);
   await createSession(userId);
 
   return NextResponse.json({ ok: true });

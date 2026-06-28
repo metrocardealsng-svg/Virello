@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import { db } from "@/lib/db";
+import { query, queryOne } from "@/lib/db";
 import { type Platform, adaptForPlatform, PLATFORMS } from "@/lib/platforms";
 
 export interface CreatePostInput {
@@ -32,22 +32,24 @@ export function validateTargets(
   return { valid: Object.keys(errors).length === 0, errors: errors as Record<Platform, string> };
 }
 
-export function createPost(input: CreatePostInput) {
+export async function createPost(input: CreatePostInput) {
   const postId = nanoid();
   const shareId = nanoid(10);
   const status = input.scheduledAt ? "scheduled" : "publishing";
 
-  db.prepare(
+  await query(
     `INSERT INTO posts (id, user_id, body, media_url, media_type, status, scheduled_at, share_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(postId, input.userId, input.body, input.mediaUrl, input.mediaType, status, input.scheduledAt, shareId);
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [postId, input.userId, input.body, input.mediaUrl, input.mediaType, status, input.scheduledAt, shareId]
+  );
 
   for (const platform of input.platforms) {
     const targetId = nanoid();
     const adapted = adaptForPlatform(input.body, platform);
-    db.prepare(
-      `INSERT INTO post_targets (id, post_id, platform, adapted_body, status) VALUES (?, ?, ?, ?, ?)`
-    ).run(targetId, postId, platform, adapted, input.scheduledAt ? "pending" : "publishing");
+    await query(
+      `INSERT INTO post_targets (id, post_id, platform, adapted_body, status) VALUES ($1, $2, $3, $4, $5)`,
+      [targetId, postId, platform, adapted, input.scheduledAt ? "pending" : "publishing"]
+    );
   }
 
   return { postId, shareId, status };
@@ -60,53 +62,57 @@ export function createPost(input: CreatePostInput) {
  * production-shaped; only the network call to the third-party platform is mocked,
  * since this environment has no registered OAuth apps with X/Meta/TikTok/Google.
  */
-export function simulatePublish(postId: string) {
-  const targets = db
-    .prepare(`SELECT * FROM post_targets WHERE post_id = ?`)
-    .all(postId) as { id: string; platform: Platform }[];
+export async function simulatePublish(postId: string) {
+  const targets = await query<{ id: string; platform: Platform }>(
+    `SELECT * FROM post_targets WHERE post_id = $1`,
+    [postId]
+  );
 
   for (const target of targets) {
     const fakeUrl = `https://${target.platform === "x" ? "x.com" : target.platform + ".com"}/post/${nanoid(8)}`;
-    db.prepare(
-      `UPDATE post_targets SET status = 'published', published_url = ?, published_at = datetime('now') WHERE id = ?`
-    ).run(fakeUrl, target.id);
+    await query(
+      `UPDATE post_targets SET status = 'published', published_url = $1, published_at = now() WHERE id = $2`,
+      [fakeUrl, target.id]
+    );
   }
 
-  db.prepare(`UPDATE posts SET status = 'published', published_at = datetime('now') WHERE id = ?`).run(
-    postId
+  await query(`UPDATE posts SET status = 'published', published_at = now() WHERE id = $1`, [postId]);
+}
+
+export async function getPostWithTargets(postId: string) {
+  const post = await queryOne(`SELECT * FROM posts WHERE id = $1`, [postId]);
+  if (!post) return null;
+  const targets = await query(`SELECT * FROM post_targets WHERE post_id = $1`, [postId]);
+  return { post, targets };
+}
+
+export async function getPostByShareId(shareId: string) {
+  const post = await queryOne<{
+    id: string;
+    body: string;
+    status: string;
+    created_at: string;
+    share_views: number;
+  }>(`SELECT * FROM posts WHERE share_id = $1`, [shareId]);
+  if (!post) return null;
+  const targets = await query(`SELECT * FROM post_targets WHERE post_id = $1`, [post.id]);
+  return { post, targets };
+}
+
+export async function incrementShareViews(postId: string) {
+  await query(`UPDATE posts SET share_views = share_views + 1 WHERE id = $1`, [postId]);
+}
+
+export async function listUserPosts(userId: string, limit = 50) {
+  const posts = await query<{ id: string }>(
+    `SELECT * FROM posts WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [userId, limit]
   );
-}
 
-export function getPostWithTargets(postId: string) {
-  const post = db.prepare(`SELECT * FROM posts WHERE id = ?`).get(postId);
-  if (!post) return null;
-  const targets = db.prepare(`SELECT * FROM post_targets WHERE post_id = ?`).all(postId);
-  return { post, targets };
-}
-
-export function getPostByShareId(shareId: string) {
-  const post = db.prepare(`SELECT * FROM posts WHERE share_id = ?`).get(shareId) as
-    | {
-        id: string;
-        body: string;
-        status: string;
-        created_at: string;
-        share_views: number;
-      }
-    | undefined;
-  if (!post) return null;
-  const targets = db.prepare(`SELECT * FROM post_targets WHERE post_id = ?`).all(post.id);
-  db.prepare(`UPDATE posts SET share_views = share_views + 1 WHERE id = ?`).run(post.id);
-  return { post, targets };
-}
-
-export function listUserPosts(userId: string, limit = 50) {
-  const posts = db
-    .prepare(`SELECT * FROM posts WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`)
-    .all(userId, limit) as { id: string }[];
-
-  return posts.map((post) => {
-    const targets = db.prepare(`SELECT * FROM post_targets WHERE post_id = ?`).all(post.id);
-    return { ...post, targets };
-  });
+  const withTargets = [];
+  for (const post of posts) {
+    const targets = await query(`SELECT * FROM post_targets WHERE post_id = $1`, [post.id]);
+    withTargets.push({ ...post, targets });
+  }
+  return withTargets;
 }

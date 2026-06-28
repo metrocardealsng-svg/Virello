@@ -18,7 +18,7 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const posts = listUserPosts(user.id);
+  const posts = await listUserPosts(user.id);
   return NextResponse.json({ posts });
 }
 
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const gate = canCreatePost(user.id, user.plan as PlanId);
+  const gate = await canCreatePost(user.id, user.plan as PlanId);
   if (!gate.allowed) {
     return NextResponse.json({ error: gate.reason }, { status: 402 });
   }
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { postId, shareId, status } = createPost({
+  const { postId, shareId, status } = await createPost({
     userId: user.id,
     body: parsed.data.body,
     mediaUrl: parsed.data.mediaUrl ?? null,
@@ -66,10 +66,10 @@ export async function POST(req: NextRequest) {
     scheduledAt: parsed.data.scheduledAt ?? null,
   });
 
-  incrementUsage(user.id);
+  await incrementUsage(user.id);
 
   if (status === "publishing") {
-    simulatePublish(postId);
+    await simulatePublish(postId);
   }
 
   return NextResponse.json({ postId, shareId, status: status === "publishing" ? "published" : status });

@@ -1,38 +1,59 @@
-import { DatabaseSync } from "node:sqlite";
-import path from "node:path";
-import fs from "node:fs";
-
-// On Vercel (and most serverless platforms), the deployment filesystem is read-only
-// except for /tmp, and /tmp itself is wiped between cold starts and redeploys. That
-// means data written here does NOT persist long-term in that environment. This is a
-// deliberate, temporary tradeoff to get the app running on Vercel without a hosted
-// database; for real signups and paying users, swap this for a hosted Postgres
-// (Vercel Postgres, Supabase, Neon all have free tiers) before launch.
-// Locally (npm run start on your own machine or a VPS), this still writes to ./data
-// and persists normally across restarts, since the filesystem isn't ephemeral there.
-const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-const DATA_DIR = isServerless ? "/tmp" : path.join(process.cwd(), "data");
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-const DB_PATH = path.join(DATA_DIR, "virello.db");
+import { Pool } from "pg";
 
 declare global {
   // eslint-disable-next-line no-var
-  var __virelloDb: DatabaseSync | undefined;
+  var __virelloPool: Pool | undefined;
 }
 
-function createConnection(): DatabaseSync {
-  const db = new DatabaseSync(DB_PATH);
-  db.exec("PRAGMA journal_mode = WAL;");
-  db.exec("PRAGMA foreign_keys = ON;");
-  return db;
+function createPool(): Pool {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error(
+      "DATABASE_URL is not set. Add your Supabase connection string as an environment variable."
+    );
+  }
+
+  // The pg library expects a well-formed connection URI, but passwords containing
+  // reserved URL characters (@, :, /, ?, #, etc.) break naive parsing if not
+  // percent-encoded. Rather than requiring the password to be pre-encoded wherever
+  // it's configured (easy to get wrong by hand), we parse the pieces out manually
+  // and percent-encode just the password before handing the URI to pg.
+  const match = connectionString.match(
+    /^postgresql:\/\/([^:]+):(.+)@([^@/]+):(\d+)\/([^?]+)(\?.*)?$/
+  );
+
+  let config: { connectionString: string };
+  if (match) {
+    const [, user, password, host, port, database, query] = match;
+    const safeUri = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(
+      password
+    )}@${host}:${port}/${database}${query ?? ""}`;
+    config = { connectionString: safeUri };
+  } else {
+    // Already well-formed (or some other format), pass through as-is.
+    config = { connectionString };
+  }
+
+  return new Pool({
+    ...config,
+    ssl: { rejectUnauthorized: false },
+    max: 5,
+  });
 }
 
-export const db: DatabaseSync = globalThis.__virelloDb ?? createConnection();
-if (process.env.NODE_ENV !== "production") globalThis.__virelloDb = db;
+function getPool(): Pool {
+  if (globalThis.__virelloPool) return globalThis.__virelloPool;
+  const pool = createPool();
+  globalThis.__virelloPool = pool;
+  return pool;
+}
 
-export function migrate() {
-  db.exec(`
+let migrated = false;
+
+export async function migrate() {
+  if (migrated) return;
+  const pool = getPool();
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
@@ -40,16 +61,16 @@ export function migrate() {
       password_hash TEXT,
       auth_provider TEXT NOT NULL DEFAULT 'email',
       plan TEXT NOT NULL DEFAULT 'free',
-      plan_renews_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      plan_renews_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       avatar_seed TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      expires_at TEXT NOT NULL
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS connected_accounts (
@@ -59,7 +80,7 @@ export function migrate() {
       handle TEXT NOT NULL,
       display_name TEXT NOT NULL,
       avatar_seed TEXT NOT NULL,
-      connected_at TEXT NOT NULL DEFAULT (datetime('now')),
+      connected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       status TEXT NOT NULL DEFAULT 'connected'
     );
 
@@ -70,9 +91,9 @@ export function migrate() {
       media_url TEXT,
       media_type TEXT,
       status TEXT NOT NULL DEFAULT 'draft',
-      scheduled_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      published_at TEXT,
+      scheduled_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      published_at TIMESTAMPTZ,
       share_id TEXT UNIQUE,
       share_views INTEGER NOT NULL DEFAULT 0
     );
@@ -85,7 +106,7 @@ export function migrate() {
       status TEXT NOT NULL DEFAULT 'pending',
       published_url TEXT,
       error_message TEXT,
-      published_at TEXT
+      published_at TIMESTAMPTZ
     );
 
     CREATE TABLE IF NOT EXISTS billing_requests (
@@ -97,13 +118,13 @@ export function migrate() {
       method TEXT NOT NULL,
       reference_note TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      reviewed_at TEXT
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      reviewed_at TIMESTAMPTZ
     );
 
     CREATE TABLE IF NOT EXISTS usage_counters (
       user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-      period_start TEXT NOT NULL,
+      period_start TIMESTAMPTZ NOT NULL DEFAULT now(),
       posts_used INTEGER NOT NULL DEFAULT 0
     );
 
@@ -112,6 +133,25 @@ export function migrate() {
     CREATE INDEX IF NOT EXISTS idx_connected_accounts_user ON connected_accounts(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
   `);
+  migrated = true;
 }
 
-migrate();
+/** Run a query, ensuring migrations have applied first. */
+export async function query<T = Record<string, unknown>>(
+  text: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  await migrate();
+  const pool = getPool();
+  const result = await pool.query(text, params);
+  return result.rows as T[];
+}
+
+/** Run a query and return only the first row, or undefined. */
+export async function queryOne<T = Record<string, unknown>>(
+  text: string,
+  params: unknown[] = []
+): Promise<T | undefined> {
+  const rows = await query<T>(text, params);
+  return rows[0];
+}

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { query } from "@/lib/db";
 import { canConnectAccount } from "@/lib/billing/usage";
 import type { PlanId } from "@/lib/billing/plans";
 import { PLATFORMS } from "@/lib/platforms";
@@ -16,9 +16,10 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const accounts = db
-    .prepare(`SELECT * FROM connected_accounts WHERE user_id = ? ORDER BY connected_at DESC`)
-    .all(user.id);
+  const accounts = await query(
+    `SELECT * FROM connected_accounts WHERE user_id = $1 ORDER BY connected_at DESC`,
+    [user.id]
+  );
 
   return NextResponse.json({ accounts });
 }
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const gate = canConnectAccount(user.id, user.plan as PlanId);
+  const gate = await canConnectAccount(user.id, user.plan as PlanId);
   if (!gate.allowed) {
     return NextResponse.json({ error: gate.reason }, { status: 402 });
   }
@@ -46,9 +47,10 @@ export async function POST(req: NextRequest) {
 
   const id = nanoid();
   const handle = parsed.data.handle.replace(/^@/, "");
-  db.prepare(
-    `INSERT INTO connected_accounts (id, user_id, platform, handle, display_name, avatar_seed) VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, user.id, parsed.data.platform, `@${handle}`, handle, nanoid(8));
+  await query(
+    `INSERT INTO connected_accounts (id, user_id, platform, handle, display_name, avatar_seed) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, user.id, parsed.data.platform, `@${handle}`, handle, nanoid(8)]
+  );
 
   return NextResponse.json({ ok: true, id });
 }
@@ -61,6 +63,6 @@ export async function DELETE(req: NextRequest) {
   const id = searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
 
-  db.prepare(`DELETE FROM connected_accounts WHERE id = ? AND user_id = ?`).run(id, user.id);
+  await query(`DELETE FROM connected_accounts WHERE id = $1 AND user_id = $2`, [id, user.id]);
   return NextResponse.json({ ok: true });
 }

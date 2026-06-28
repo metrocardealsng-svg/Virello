@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import { getCurrentUser } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { query } from "@/lib/db";
 import { PLANS, type PlanId, type BillingCycle } from "@/lib/billing/plans";
 
 const billingSchema = z.object({
@@ -33,10 +33,11 @@ export async function POST(req: NextRequest) {
   const amount = cycle === "annual" ? plan.annualPriceKobo : plan.monthlyPriceKobo;
 
   const id = nanoid();
-  db.prepare(
+  await query(
     `INSERT INTO billing_requests (id, user_id, plan, billing_cycle, amount_kobo, method, reference_note, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`
-  ).run(id, user.id, plan.id, cycle, amount, parsed.data.method, parsed.data.referenceNote ?? null);
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')`,
+    [id, user.id, plan.id, cycle, amount, parsed.data.method, parsed.data.referenceNote ?? null]
+  );
 
   return NextResponse.json({ ok: true, requestId: id });
 }
@@ -45,9 +46,9 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const requests = db
-    .prepare(`SELECT * FROM billing_requests WHERE user_id = ? ORDER BY created_at DESC`)
-    .all(user.id);
+  const requests = await query(`SELECT * FROM billing_requests WHERE user_id = $1 ORDER BY created_at DESC`, [
+    user.id,
+  ]);
 
   return NextResponse.json({ requests });
 }
