@@ -2,7 +2,16 @@ import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import fs from "node:fs";
 
-const DATA_DIR = path.join(process.cwd(), "data");
+// On Vercel (and most serverless platforms), the deployment filesystem is read-only
+// except for /tmp, and /tmp itself is wiped between cold starts and redeploys. That
+// means data written here does NOT persist long-term in that environment. This is a
+// deliberate, temporary tradeoff to get the app running on Vercel without a hosted
+// database; for real signups and paying users, swap this for a hosted Postgres
+// (Vercel Postgres, Supabase, Neon all have free tiers) before launch.
+// Locally (npm run start on your own machine or a VPS), this still writes to ./data
+// and persists normally across restarts, since the filesystem isn't ephemeral there.
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const DATA_DIR = isServerless ? "/tmp" : path.join(process.cwd(), "data");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const DB_PATH = path.join(DATA_DIR, "virello.db");
