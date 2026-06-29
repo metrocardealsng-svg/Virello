@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { VirelloLogo } from "@/components/icons/logo";
-import { LayoutGrid, PenSquare, History, Link2, CreditCard, LogOut } from "lucide-react";
+import { LayoutGrid, PenSquare, History, Link2, CreditCard, LogOut, ShieldCheck } from "lucide-react";
 
 const LINKS = [
   { href: "/dashboard", label: "Overview", icon: LayoutGrid },
@@ -13,7 +13,13 @@ const LINKS = [
   { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
 ];
 
-export function DashboardSidebar({ planLabel }: { planLabel: string }) {
+export function DashboardSidebar({
+  planLabel,
+  isAdmin = false,
+}: {
+  planLabel: string;
+  isAdmin?: boolean;
+}) {
   const pathname = usePathname();
   const router = useRouter();
 
@@ -51,6 +57,20 @@ export function DashboardSidebar({ planLabel }: { planLabel: string }) {
             </Link>
           );
         })}
+
+        {isAdmin && (
+          <Link
+            href="/admin"
+            className={`mt-2 flex items-center gap-3 rounded-lg border border-amber/30 px-3 py-2.5 text-sm transition-colors ${
+              pathname === "/admin"
+                ? "bg-amber/15 text-text font-medium"
+                : "text-amber hover:bg-amber/10"
+            }`}
+          >
+            <ShieldCheck size={17} />
+            Admin · Billing
+          </Link>
+        )}
       </nav>
 
       <button
